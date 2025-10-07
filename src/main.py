@@ -4,7 +4,7 @@ import os
 import sqlite3
 from aiogram import Bot, Dispatcher, F
 from datetime import datetime, timezone, timedelta
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, BaseFilter
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
@@ -18,8 +18,11 @@ logging.basicConfig(level=logging.INFO)
 # Получаем токен бота
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
-# ID администраторов (добавь свой ID)
+# ID администраторов
 ADMIN_IDS = [1946022501]
+
+# ID забаненных участников
+BAN_IDS = []
 
 # Создаем объекты бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
@@ -27,6 +30,19 @@ dp = Dispatcher()
 
 # Московская таймзона UTC+3
 MOSCOW_TZ = timezone(timedelta(hours=3))
+
+
+# Кастомный фильтр для проверки админов
+class IsAdmin(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        return message.from_user.id in ADMIN_IDS
+
+
+# Кастомный фильтр для проверки админов
+class NotIsBan(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        return message.from_user.id not in BAN_IDS
+
 
 # Функция для получения московского времени
 def get_moscow_time():
@@ -92,6 +108,7 @@ def save_user_answer(user_id, answer):
     conn.close()
     print(f"terminal: Ответ пользователя {user_id}: {answer}")
 
+
 # Функция для создания inline клавиатуры с кнопками Да/Нет
 def get_yes_no_keyboard():
     """Создает inline клавиатуру с кнопками Да и Нет"""
@@ -103,22 +120,22 @@ def get_yes_no_keyboard():
     kb.adjust(2)  # 2 кнопки в один ряд
     return kb.as_markup()
 
+
 # Хэндлер команды /start
-@dp.message(CommandStart())
+@dp.message(CommandStart(), NotIsBan())
 async def cmd_start(message: Message):
+
     # Добавляем пользователя в БД
     add_user_to_db(
-        user_id=message.from_user.id,
-        username=message.from_user.username,
-        first_name=message.from_user.first_name
-    )
+            user_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name)
 
     # Задаем вопрос с inline кнопками
     await message.answer(
         f"Привет! Я тут задумался и захотел задать вопрос каждому студенту ЦУ.\n"
-        f"Ты бы хотел видеть квест в цу на подобии 'Цикады 3301', 'Mr. Robot' и тому подобные?",
-        reply_markup=get_yes_no_keyboard()
-    )
+            f"Ты бы хотел видеть квест в цу на подобии 'Цикады 3301', 'Mr. Robot' и тому подобные?",
+            reply_markup=get_yes_no_keyboard())
 
 
 # Хэндлер для обработки нажатий на inline кнопки
@@ -146,46 +163,43 @@ async def process_no_answer(callback: CallbackQuery):
     await callback.message.edit_text("Хорошо, твой ответ записан. Спасибо за участие в опросе!")
 
 
-@dp.message(Command('help'))
+@dp.message(Command('help'), NotIsBan())
 async def cmd_help(message: Message):
     await message.answer("Пока что здесь ничего нет, так как мы ждем результаты опроса.")
 
 
-@dp.message(Command('stats'))
+@dp.message(Command('stats'), IsAdmin())
 async def cmd_stats(message: Message):
     """Показывает статистику ответов из БД"""
-    if message.from_user.id in ADMIN_IDS:
-        conn = sqlite3.connect('bot_users.db')
-        cursor = conn.cursor()
+    conn = sqlite3.connect('bot_users.db')
+    cursor = conn.cursor()
 
-        # Считаем ответы
-        cursor.execute('SELECT answer, COUNT(*) FROM users WHERE answer IS NOT NULL GROUP BY answer')
-        results = cursor.fetchall()
+    # Считаем ответы
+    cursor.execute('SELECT answer, COUNT(*) FROM users WHERE answer IS NOT NULL GROUP BY answer')
+    results = cursor.fetchall()
 
-        cursor.execute('SELECT COUNT(*) FROM users')
-        total_users = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(*) FROM users')
+    total_users = cursor.fetchone()[0]
 
-        conn.close()
+    conn.close()
 
-        # Формируем статистику
-        stats_text = f"Статистика ответов:\n\n"
-        stats_text += f"Всего пользователей: {total_users}\n\n"
+    # Формируем статистику
+    stats_text = f"Статистика ответов:\n\n"
+    stats_text += f"Всего пользователей: {total_users}\n\n"
 
-        if results:
-            for answer, count in results:
-                stats_text += f"{'✅' if answer == 'Да' else '❌'} {answer}: {count}\n"
-        else:
-            stats_text += "Пока нет ответов"
-
-        await message.answer(stats_text)
+    if results:
+        for answer, count in results:
+            stats_text += f"{'✅' if answer == 'Да' else '❌'} {answer}: {count}\n"
     else:
-        await message.answer("У вас нет доступа к этой команде")
+        stats_text += "Пока нет ответов"
+
+    await message.answer(stats_text)
 
 
 # Хэндлер для всех остальных сообщений
 @dp.message()
 async def echo_message(message: Message):
-    await message.answer("Неизвестная команда")
+    await message.answer("Неизвестная команда.")
 
 
 # Главная функция
